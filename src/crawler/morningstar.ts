@@ -36,7 +36,7 @@ export class Morningstar {
 
     FILTER_SYMBOL_MARKET = "";
     FILTER_SYMBOL_CODE = ""; // AKE
-    SYMBOL_STARTS_FROM = "MMM"; // in case of bugs, starts crawling from this symbol 
+    SYMBOL_STARTS_FROM = "alodc"; // in case of bugs, starts crawling from this symbol 
     RESOURCE_EXCLUSTIONS: string[] = ['image'];//['image', 'stylesheet', 'media', 'font', 'other'];
 
     UPDATE = false;
@@ -330,7 +330,7 @@ export class Morningstar {
 
         // is GREAT 
         stocki.scores.netMarginHistoryGreat = this.getScoreHistoryGreaterThan(stocki.netMarginHistory!, 7, 4)
-        stocki.scores.roicHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 9, 4)
+        stocki.scores.roicHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 15, 4)
         stocki.scores.roeHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 20, 4)
         stocki.scores.fcfNetIncomeGreat = this.getScoreHistoryGreaterThan(stocki.cfNetIncomeHistory!, 0.8, 4)
 
@@ -342,9 +342,11 @@ export class Morningstar {
         stocki.scores.fcfShareIncrease = this.getScoreHistoryIsIncreasing(stocki.cfShareHistory!, 3) ?? 0
 
         stocki.scores.priceBookScore = stocki.pbv! > 0 ? stocki.pbv! < 2 ? 2 : stocki.pbv! < 3 ? 1 : 0 : 0;
-        stocki.scores.priceSalesScore = stocki.ps! > 0 ? stocki.ps! < 1.5 ? 2 : stocki.ps! < 2 ? 1 : 0 : 0;
-        stocki.scores.priceCashFlowScore = stocki.pcf! > 0 ? stocki.pcf! < 8 ? 2 : stocki.ps! < 12 ? 1 : 0 : 0;
-        stocki.scores.priceEarningsScore = stocki.per! > 0 ? stocki.per! < 13 ? 2 : stocki.per! < 17 ? 1 : 0 : 0;
+        // y = -15x + 24
+        stocki.scores.priceSalesScore = this.getScorePriceToSales(stocki.ps);
+        // (! cf yield!, donc 1/pcf ) y = 2.11x - 3.24
+        stocki.scores.priceCashFlowScore = this.getScorePriceToCashFlow(stocki.pcf);
+        stocki.scores.priceEarningsScore = this.getScorePriceToEarnings(stocki.per);
 
 
         stocki.scores.totalScore = +Object.values(stocki.scores)
@@ -352,27 +354,69 @@ export class Morningstar {
             .reduce((a, b) => a + b, 0)
             .toFixed(1)
 
-        stocki.scores.valueRatiosTotal = stocki.scores.priceBookScore
+        stocki.scores.valueRatiosTotal = +(stocki.scores.priceBookScore
             + stocki.scores.priceSalesScore
             + stocki.scores.priceCashFlowScore
-            + stocki.scores.priceEarningsScore;
+            + stocki.scores.priceEarningsScore).toFixed(1);
 
-        stocki.scores.baseProfitTotal = stocki.scores.roicHistoryPositive
+        stocki.scores.baseProfitTotal = +(stocki.scores.roicHistoryPositive
             + stocki.scores.netMarginHistoryPositive
             + stocki.scores.roeHistoryPositive
-            + stocki.scores.fcfSharePositive;
+            + stocki.scores.fcfSharePositive).toFixed(1);
 
 
-        stocki.scores.greatProfitTotal = stocki.scores.roeHistoryGreat
+        stocki.scores.greatProfitTotal = +(stocki.scores.roeHistoryGreat
             + stocki.scores.roicHistoryGreat
             + stocki.scores.netMarginHistoryGreat
             + stocki.scores.fcfNetIncomeGreat
             + stocki.scores.fcfShareIncrease
-            + stocki.scores.bookValueHistoryIncrease;
+            + stocki.scores.bookValueHistoryIncrease).toFixed(1);
 
-        stocki.scores.profitabilityTotal = stocki.scores.totalScore - stocki.scores.valueRatiosTotal;
+        stocki.scores.profitabilityTotal = +(stocki.scores.totalScore - stocki.scores.valueRatiosTotal).toFixed(1)
 
         return stocki;
+    }
+    getScorePriceToCashFlow(fcfratio: number | undefined): number {
+        // max : 2 points
+
+        if (!fcfratio || fcfratio < 0)
+            return 0;
+
+        // linear equation 10yr return : -0.7x + 25
+        const result = -0.7 * fcfratio + 25;
+
+        if (result < 0)
+            return 0;
+
+        return +Math.fround(result * 2 / 25).toFixed(1);
+    }
+    getScorePriceToEarnings(per: number | undefined): number {
+        // max : 2 points
+
+        if (!per)
+            return 0;
+
+        // linear equation 10yr return : -0.5x + 14
+        const result = -0.5 * per + 14;
+
+        if (result < 0)
+            return 0;
+
+        return +Math.fround(result * 2 / 14).toFixed(1);
+    }
+    getScorePriceToSales(ps: number | undefined) {
+        // max : 2 points
+
+        if (!ps)
+            return 0;
+
+        // linear equation 10yr return : -15 + 24
+        const result = -15 * ps + 24;
+
+        if (result < 0)
+            return 0;
+
+        return +Math.fround(result * 2 / 24).toFixed(1);
     }
 
 
@@ -458,7 +502,7 @@ export class Morningstar {
 
     async getArrayOfStocks(): Promise<StockCodes[]> {
 
-        let stocks = await this.getSourceFromGurufocus("de");
+        let stocks = await this.getSourceFromGurufocus("xpar");
         if (this.FILTER_SYMBOL_CODE && this.FILTER_SYMBOL_CODE.length > 0) {
             return [stocks.find((s) => s.v === this.FILTER_SYMBOL_CODE)!];
         }

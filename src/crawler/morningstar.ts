@@ -220,6 +220,10 @@ export class Morningstar {
             console.error('button Operating and Efficiency not found');
             return null;
         }
+        
+        await page.getByRole('button', { name: 'Growth' }).click();
+        await page.waitForSelector(".sal-component-key-stats-growth-table", { timeout: 10000 });
+        infos.revenueGrowthHistory = await this.getHistoryStatsGrowth(page, "Revenue %", "Year Over Year");
 
         await page.getByRole('button', { name: 'Operating and Efficiency' }).click();
         await page.waitForSelector(".sal-component-key-stats-oper-efficiency", { timeout: 10000 });
@@ -495,6 +499,19 @@ export class Morningstar {
         return allValues.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v))
     }
 
+    async getHistoryStatsGrowth(page: Page, section: string, rowHeader: string) {
+        
+        const elements = await page
+        .locator("tr:below(tr:has(td:text('Revenue %')))")
+        .locator("nth=0")
+            .locator("td:not(:first-child)")
+            .elementHandles();
+        const allValues = await Promise.all(elements.map(async (e) => await e.innerText()));
+        // remove last column as it is the "5yr average"
+        allValues.pop();
+        return allValues.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v))
+    }
+
     async getDpValue(page: Page, textLabel: string) {
         const loc = await page.$(`div.dp-value:below(:text('${textLabel}'))`);
         const txt = await loc?.innerText();
@@ -510,7 +527,7 @@ export class Morningstar {
 
         let stocks = await this.getSourceFromGurufocus(this.COUNTRY);
         if (this.FILTER_SYMBOL_CODE && this.FILTER_SYMBOL_CODE.length > 0) {
-            return [stocks.find((s) => s.v === this.FILTER_SYMBOL_CODE)!];
+            return [stocks.find((s) => s.v.toLowerCase() === this.FILTER_SYMBOL_CODE.toLowerCase())!];
         }
         if (this.FILTER_SYMBOL_MARKET) {
             stocks = stocks.filter((s: StockCodes) => s.market == this.FILTER_SYMBOL_MARKET)
@@ -715,6 +732,7 @@ type StockInfos = {
     bookValueHistory?: number[];
     roicHistory?: number[];
     netMarginHistory?: number[];
+    revenueGrowthHistory?: number[];
 
     ratioAvailable?: boolean;
     pbv?: number;

@@ -30,13 +30,15 @@ const blankScore: StockInfosScore = {
     profitabilityTotal: 0,
     greatProfitTotal: 0,
 }
+type CountryList = "be"|"de"|"de"|"es"|"fi"|"it"|"nl"|"no"|"se"|"xpar";
 
 export class Morningstar {
     static BASE_URL = "https://www.morningstar.com/stocks/$market/$code/valuation";
 
+    COUNTRY: CountryList = "de"
     FILTER_SYMBOL_MARKET = "";
-    FILTER_SYMBOL_CODE = ""; // AKE
-    SYMBOL_STARTS_FROM = "alodc"; // in case of bugs, starts crawling from this symbol 
+    FILTER_SYMBOL_CODE = "FQT"; // AKE
+    SYMBOL_STARTS_FROM = ""; // in case of bugs, starts crawling from this symbol 
     RESOURCE_EXCLUSTIONS: string[] = ['image'];//['image', 'stylesheet', 'media', 'font', 'other'];
 
     UPDATE = false;
@@ -81,6 +83,10 @@ export class Morningstar {
                     await page.close()
                 }
                 page = await this.getPage();
+            }
+            if(!stock){
+                console.error("Stock not found")
+                continue;
             }
 
             const filename = `${stock.market.toLowerCase()}_${stock.v.toLowerCase()}.json`
@@ -502,7 +508,7 @@ export class Morningstar {
 
     async getArrayOfStocks(): Promise<StockCodes[]> {
 
-        let stocks = await this.getSourceFromGurufocus("xpar");
+        let stocks = await this.getSourceFromGurufocus(this.COUNTRY);
         if (this.FILTER_SYMBOL_CODE && this.FILTER_SYMBOL_CODE.length > 0) {
             return [stocks.find((s) => s.v === this.FILTER_SYMBOL_CODE)!];
         }

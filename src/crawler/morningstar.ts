@@ -24,11 +24,14 @@ const blankScore: StockInfosScore = {
     roeHistoryGood: 0,
     roeHistoryPositive: 0,
     roicHistoryPositive: 0,
+    revenueGrowthHistoryGreat: 0,
+    revenueGrowthHistoryPositive: 0,
 
     baseProfitTotal: 0,
     valueRatiosTotal: 0,
     profitabilityTotal: 0,
     greatProfitTotal: 0,
+    sweetSpotValue: 0,
 }
 type CountryList = "be"|"de"|"de"|"es"|"fi"|"it"|"nl"|"no"|"se"|"xpar";
 
@@ -37,7 +40,7 @@ export class Morningstar {
 
     COUNTRY: CountryList = "de"
     FILTER_SYMBOL_MARKET = "";
-    FILTER_SYMBOL_CODE = "FQT"; // AKE
+    FILTER_SYMBOL_CODE = ""; // AKE
     SYMBOL_STARTS_FROM = ""; // in case of bugs, starts crawling from this symbol 
     RESOURCE_EXCLUSTIONS: string[] = ['image'];//['image', 'stylesheet', 'media', 'font', 'other'];
 
@@ -333,6 +336,7 @@ export class Morningstar {
         // is positive
         stocki.scores.roicHistoryPositive = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 0, 2) ?? 0
         stocki.scores.netMarginHistoryPositive = this.getScoreHistoryGreaterThan(stocki.netMarginHistory!, 0, 2) ?? 0
+        stocki.scores.revenueGrowthHistoryPositive = this.getScoreHistoryGreaterThan(stocki.revenueGrowthHistory!, 0, 2) ?? 0
         stocki.scores.roeHistoryPositive = this.getScoreHistoryGreaterThan(stocki.roeHistory!, 0, 2) ?? 0
         stocki.scores.fcfSharePositive = this.getScoreHistoryGreaterThan(stocki.cfShareHistory!, 0, 3) ?? 0
         stocki.scores.fcfNetIncomeGood = this.getScoreHistoryGreaterThan(stocki.cfNetIncomeHistory!, 0.5, 2) ?? 0
@@ -343,6 +347,7 @@ export class Morningstar {
         stocki.scores.roicHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 15, 4)
         stocki.scores.roeHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 20, 4)
         stocki.scores.fcfNetIncomeGreat = this.getScoreHistoryGreaterThan(stocki.cfNetIncomeHistory!, 0.8, 4)
+        stocki.scores.revenueGrowthHistoryGreat = this.getScoreHistoryGreaterThan(stocki.revenueGrowthHistory!, 5, 4) ?? 0
 
         // increasing
         stocki.scores.roicHistoryIncrease = this.getScoreHistoryIsIncreasing(stocki.roicHistory!, 2) ?? 0
@@ -371,16 +376,20 @@ export class Morningstar {
 
         stocki.scores.baseProfitTotal = +(stocki.scores.roicHistoryPositive
             + stocki.scores.netMarginHistoryPositive
+            + stocki.scores.revenueGrowthHistoryPositive
             + stocki.scores.roeHistoryPositive
             + stocki.scores.fcfSharePositive).toFixed(1);
-
 
         stocki.scores.greatProfitTotal = +(stocki.scores.roeHistoryGreat
             + stocki.scores.roicHistoryGreat
             + stocki.scores.netMarginHistoryGreat
             + stocki.scores.fcfNetIncomeGreat
+            + stocki.scores.revenueGrowthHistoryGreat
             + stocki.scores.fcfShareIncrease
             + stocki.scores.bookValueHistoryIncrease).toFixed(1);
+
+        stocki.scores.sweetSpotValue = +(stocki.scores.valueRatiosTotal + stocki.scores.greatProfitTotal).toFixed(1);
+
 
         stocki.scores.profitabilityTotal = +(stocki.scores.totalScore - stocki.scores.valueRatiosTotal).toFixed(1)
 
@@ -479,7 +488,7 @@ export class Morningstar {
     }
 
     getScoreHistoryGreaterThan(history: number[], compareTo = 0, maxScore = 5): number {
-        if (history.length === 0)
+        if (!history || history.length === 0)
             return 0;
         const res = +(history.filter(h => h > compareTo).length / history.length * maxScore).toFixed(1);
         if (res === null) {
@@ -504,7 +513,7 @@ export class Morningstar {
         const elements = await page
         .locator("tr:below(tr:has(td:text('Revenue %')))")
         .locator("nth=0")
-            .locator("td:not(:first-child)")
+        .locator("td:not(:first-child)")
             .elementHandles();
         const allValues = await Promise.all(elements.map(async (e) => await e.innerText()));
         // remove last column as it is the "5yr average"
@@ -746,28 +755,43 @@ type StockInfosScore = {
     fcfShareIncrease?: number;
     fcfNetIncomeGood?: number;
     fcfNetIncomeGreat?: number;
+    /** max 3 */
     fcfSharePositive?: number;
     totalScore?: number;
     roeHistoryIncrease?: number;
+    
+    /** max 2 */
     priceBookScore?: number;
+    /** max 2 */
     priceSalesScore?: number;
+    /** max 2 */
     priceEarningsScore?: number;
+    /** max 2 */
     priceCashFlowScore?: number;
+
     bookValueHistoryIncrease?: number;
     roicHistoryIncrease?: number;
     netMarginHistoryIncrease?: number;
+    /** max 2 */
     netMarginHistoryPositive?: number;
+    revenueGrowthHistoryPositive?: number;
     netMarginHistoryGreat?: number;
+    revenueGrowthHistoryGreat?: number;
     roicHistoryGreat?: number;
     roeHistoryGreat?: number;
     roeHistoryGood?: number;
+    /** max 2 */
     roeHistoryPositive?: number;
+    /** max 2 */
     roicHistoryPositive?: number;
 
+    /** max 9 */
     baseProfitTotal?: number;
+    /** max 8 */
     valueRatiosTotal?: number;
     profitabilityTotal?: number;
     greatProfitTotal?: number;
+    sweetSpotValue?: number;
 }
 
 type StockCodes = { c: string; v: string; isin: string; market: string; }

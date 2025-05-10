@@ -2,6 +2,10 @@ import { ChromiumBrowserContext, Page } from "playwright";
 import fs from "fs";
 import path from "path"
 import { parse, unparse } from "papaparse"
+import { ResponseProfitEfficiency } from "../types/ResponseProfitEfficiency";
+import { BalanceSheetList, BalanceSheetListDataList, CashFlowList, CashFlowListDataList, IncomeStatementDataList, IncomeStatementList, ResponseKeyMetricsSummary } from "../types/ResponseKeyMetricsSummary";
+import { ResponseFinancialHealth } from "../types/ResponseHealth";
+import { ResponseCashFlow } from "../types/ResponseCashFlow";
 
 const blankScore: StockInfosScore = {
     fcfShareIncrease: 0,
@@ -33,14 +37,14 @@ const blankScore: StockInfosScore = {
     greatProfitTotal: 0,
     sweetSpotValue: 0,
 }
-type CountryList = "be"|"de"|"de"|"es"|"fi"|"it"|"nl"|"no"|"se"|"xpar";
+type CountryList = "be"|"de"|"es"|"fi"|"it"|"nl"|"no"|"se"|"xpar"|"pt";
 
 export class Morningstar {
     static BASE_URL = "https://www.morningstar.com/stocks/$market/$code/valuation";
 
     COUNTRY: CountryList = "de"
     FILTER_SYMBOL_MARKET = "";
-    FILTER_SYMBOL_CODE = ""; // AKE
+    FILTER_SYMBOL_CODE = "psg"; // AKE
     SYMBOL_STARTS_FROM = ""; // in case of bugs, starts crawling from this symbol 
     RESOURCE_EXCLUSTIONS: string[] = ['image'];//['image', 'stylesheet', 'media', 'font', 'other'];
 
@@ -58,11 +62,18 @@ export class Morningstar {
     async getPage() {
 
         const page = await this.context.newPage();
+
+        // Create a set of excluded resource types.
+        const excludedResources = new Set(this.RESOURCE_EXCLUSTIONS);
+
+        // Add a route handler to abort requests for excluded resource types.
         await page.route('**/*', (route) => {
-            return this.RESOURCE_EXCLUSTIONS.includes(route.request().resourceType())
-                ? route.abort()
-                : route.continue()
+            if (excludedResources.has(route.request().resourceType())) {
+                return route.abort();
+            }
+            return route.continue();
         });
+
         return page;
     }
 
@@ -101,6 +112,10 @@ export class Morningstar {
                 const contentStr = (await fs.readFileSync(filepath)).toString();
                 let parsedFile = {};
                 if (contentStr !== null && contentStr !== "") {
+                    if(contentStr === "{}"){
+                        console.log("empty object file")
+                        continue;
+                    }
                     parsedFile = JSON.parse(contentStr);
                 }
                 // if (Object.keys(parsedFile).length == 0) {
@@ -193,10 +208,11 @@ export class Morningstar {
 
     private async getStockInfos(page: Page, stock: StockCodes) {
         await page.waitForTimeout(5000);
-
+        console.log(`Crawling https://www.morningstar.com/stocks/${stock.market.toLowerCase()}/${stock.v.toLowerCase()}/valuation`)
         await page.goto(`https://www.morningstar.com/stocks/${stock.market.toLowerCase()}/${stock.v.toLowerCase()}/valuation`);
         try {
-            await page.waitForSelector("text=Key Statistics", { timeout: 10000 })
+            await page.waitForSelector(".sal-component-expand", { timeout: 10000 })
+            await page.click(".sal-component-expand")
         } catch (ex) {
             console.error('waiting for selector Key Statistics failed');
             return null;
@@ -208,45 +224,77 @@ export class Morningstar {
             return null;
         }
 
-        let overviewVisible = false;
-        try {
-            await page.waitForSelector("text=Growth (3-Year Annualized)", { timeout: 3000 })
-            overviewVisible = true;
-        } catch (error) {
-            console.warn(`Company overview not visible`)
-        }
-        const infos: StockInfos = overviewVisible ? await this.getKeyStats(page) : await this.getKeyStatsFallback(page);
 
-        try {
-            await page.getByRole('button', { name: 'Operating and Efficiency' }).scrollIntoViewIfNeeded()
-        } catch (ex) {
-            console.error('button Operating and Efficiency not found');
+        // const infos: StockInfos = overviewVisible ? await this.getKeyStats(page) : await this.getKeyStatsFallback(page);
+        const infos: StockInfos = await this.getKeyStatsFallback(page);
+
+
+
+
+        console.log("Clicking Key Metrics")
+        // await page.click("a.mdc-link__mdc.mds-button__mdc");
+        const responseKeyMetricsPromise = page.waitForResponse(response => response.url().includes("keyMetrics/summary") && response.status() === 200, { timeout: 10000 });
+        await page.getByRole('link', { name: 'Key Metrics' }).click();
+        const responseKM = await responseKeyMetricsPromise;
+        if (!responseKM) {
+            console.error('responseKM not found');
             return null;
         }
+        const respKeyMetricsJson:ResponseKeyMetricsSummary = await responseKM.json();
+
+        infos.revenueGrowthHistory =  this.getHistoryStatsGrowthResponse(respKeyMetricsJson,'incomeStatementList', 'revenueGrowthPer');
+        infos.netMarginHistory =  this.getHistoryStatsGrowthResponse(respKeyMetricsJson,'incomeStatementList', 'netIncomeMarginPer');
+        infos.bookValueHistory = this.getHistoryStatsGrowthResponse(respKeyMetricsJson,'balanceSheetList', "bookValuePerShare");
+
         
-        await page.getByRole('button', { name: 'Growth' }).click();
-        await page.waitForSelector(".sal-component-key-stats-growth-table", { timeout: 10000 });
-        infos.revenueGrowthHistory = await this.getHistoryStatsGrowth(page, "Revenue %", "Year Over Year");
 
-        await page.getByRole('button', { name: 'Operating and Efficiency' }).click();
-        await page.waitForSelector(".sal-component-key-stats-oper-efficiency", { timeout: 10000 });
 
-        infos.netMarginHistory = await this.getHistoryStats(page, "Net Margin %");
-        infos.roeHistory = await this.getHistoryStats(page, "Return on Equity %");
-        infos.roicHistory = await this.getHistoryStats(page, "Return on Invested Capital %");
 
-        await page.getByRole('button', { name: 'Financial Health' }).click();
-        await page.waitForSelector(".sal-component-key-stats-financial-health", { timeout: 10000 });
-        infos.currentRatioHistory = await this.getHistoryStats(page, "Current Ratio");
+        console.log("Clicking Profitability and Efficiency tab")
+        const responseProfitPromise = page.waitForResponse(response => response.url().includes("profitabilityAndEfficiency") && response.status() === 200, { timeout: 10000 });
+        await page.locator('.segment-band__tabs .mds-button-group__item__sal' ).filter({ hasText: /Profitability and Efficiency/i }).click();
+        const responseProfit = await responseProfitPromise;
+        if (!responseProfit) {
+            console.error('responseProfit not found');
+            return null;
+        }
+        const respProfitJson = await responseProfit.json();
+        infos.roeHistory =  this.getHistoryStatsResponse(respProfitJson, "roe");
+        infos.roicHistory =  this.getHistoryStatsResponse(respProfitJson,  "roic");
+        // infos.roicHistory = await this.getHistoryStatsResponse(respProfitJson, "roa");
+
+
+
+
+        console.log("Clicking Financial Health tab")
+        const responseHealthPromise = page.waitForResponse(response => response.url().includes("keyMetrics/financialHealth") && response.status() === 200, { timeout: 10000 });
+        await page.locator('.segment-band__tabs .mds-button-group__item__sal' ).filter({ hasText: /Financial Health/i }).click();
+        const responseHealth = await responseHealthPromise;
+        if (!responseHealth) {
+            console.error('responseHealth not found');
+            return null;
+        }
+        const responseHealthJson: ResponseFinancialHealth = await responseHealth.json();
+
+        infos.currentRatioHistory = this.getHistoryStatsHealthResponse(responseHealthJson, "currentRatio");
+        infos.bookValueHistory = this.getHistoryStatsHealthResponse(responseHealthJson, "bookValuePerShare") ;
         // If a company's ROE is growing, its P/B ratio should be doing the same. 
-        infos.bookValueHistory = await this.getHistoryStats(page, "Book Value/Share");
 
-        await page.getByRole('button', { name: 'Cash Flow' }).click();
-        await page.waitForSelector(".sal-component-key-stats-cash-flow", { timeout: 10000 });
-        infos.cfNetIncomeHistory = await this.getHistoryStats(page, "Free Cash Flow/Net Income");
-        infos.cfShareHistory = await this.getHistoryStats(page, "Free Cash Flow/Share");
-        //infos.evHistory = await this.getHistoryStats(page, "Enterprise Value (Bil)")
 
+        console.log("Clicking Cash Flow tab")
+        const responseCashFlowPromise = page.waitForResponse(response => response.url().includes("cashFlow") && response.status() === 200, { timeout: 10000 });
+        await page.locator('.segment-band__tabs .mds-button-group__item__sal' ).filter({ hasText: /Cash Flow/i }).click();
+        const responseCashFlow = await responseCashFlowPromise;
+        if (!responseCashFlow) {
+            console.error('responseCashFlow not found');
+            return null;
+        }
+        const responseCashFlowJson: ResponseCashFlow = await responseCashFlow.json();
+        
+        infos.cfNetIncomeHistory = this.getHistoryStatsCashFlowResponse(responseCashFlowJson, "freeCashFlowPerNetIncome");
+        infos.cfShareHistory = this.getHistoryStatsCashFlowResponse(responseCashFlowJson, "freeCashFlowPerShare");
+
+        
         return infos;
     }
     private async getKeyStatsFallback(page: Page): Promise<StockInfos> {
@@ -258,12 +306,12 @@ export class Morningstar {
             ratioAvailable: false,
         };
         try {
-            await page.waitForSelector(".sal-components-wrapper table.mds-table__sal", { timeout: 10000 });
+            await page.waitForSelector("sal-components-stocks-valuation .mds-table__sal", { timeout: 10000 });
         } catch {
             return defaultNotFound;
         }
 
-        var listTh = await page.$$(".sal-components-wrapper table.mds-table__sal th");
+        var listTh = await page.$$("sal-components-stocks-valuation th.mds-th__sal");
         let indexOfCurrent = -1;
         for (let index = 0; index < listTh.length; index++) {
             const th = listTh[index];
@@ -275,10 +323,10 @@ export class Morningstar {
         if (indexOfCurrent == -1)
             return defaultNotFound;
 
-        const priceSales = await this.getContentInTableForIndex(page, "Price/Sales", ".sal-components-wrapper table.mds-table__sal tr", indexOfCurrent);
-        const priceEarnings = await this.getContentInTableForIndex(page, "Price/Earnings", ".sal-components-wrapper table.mds-table__sal tr", indexOfCurrent);
-        const priceBook = await this.getContentInTableForIndex(page, "Price/Book", ".sal-components-wrapper table.mds-table__sal tr", indexOfCurrent);
-        const priceCashFlow = await this.getContentInTableForIndex(page, "Price/Cash Flow", ".sal-components-wrapper table.mds-table__sal tr", indexOfCurrent);
+        const priceSales = await this.getContentInTableForIndex(page, "Price/Sales", "sal-components-stocks-valuation .mds-tr__sal ", indexOfCurrent);
+        const priceEarnings = await this.getContentInTableForIndex(page, "Price/Earnings", "sal-components-stocks-valuation .mds-tr__sal ", indexOfCurrent);
+        const priceBook = await this.getContentInTableForIndex(page, "Price/Book", "sal-components-stocks-valuation .mds-tr__sal ", indexOfCurrent);
+        const priceCashFlow = await this.getContentInTableForIndex(page, "Price/Cash Flow", "sal-components-stocks-valuation .mds-tr__sal ", indexOfCurrent);
         return {
             pbv: priceBook,
             per: priceEarnings,
@@ -345,7 +393,7 @@ export class Morningstar {
         // is GREAT 
         stocki.scores.netMarginHistoryGreat = this.getScoreHistoryGreaterThan(stocki.netMarginHistory!, 7, 4)
         stocki.scores.roicHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 15, 4)
-        stocki.scores.roeHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roicHistory!, 20, 4)
+        stocki.scores.roeHistoryGreat = this.getScoreHistoryGreaterThan(stocki.roeHistory!, 20, 4)
         stocki.scores.fcfNetIncomeGreat = this.getScoreHistoryGreaterThan(stocki.cfNetIncomeHistory!, 0.8, 4)
         stocki.scores.revenueGrowthHistoryGreat = this.getScoreHistoryGreaterThan(stocki.revenueGrowthHistory!, 5, 4) ?? 0
 
@@ -379,6 +427,8 @@ export class Morningstar {
             + stocki.scores.revenueGrowthHistoryPositive
             + stocki.scores.roeHistoryPositive
             + stocki.scores.fcfSharePositive).toFixed(1);
+
+        
 
         stocki.scores.greatProfitTotal = +(stocki.scores.roeHistoryGreat
             + stocki.scores.roicHistoryGreat
@@ -508,6 +558,30 @@ export class Morningstar {
         return allValues.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v))
     }
 
+    getHistoryStatsResponse(response: ResponseProfitEfficiency, keyStats:"roa"|"roe"|"roic"): number[] {
+        if(response?.dataList.length > 0){
+            return response.dataList.map((d) => d[keyStats]).filter(v => typeof v === "number").map(v => +v.toFixed(1)) as number[]
+        }
+        return []
+    }
+
+    getHistoryStatsHealthResponse(response: ResponseFinancialHealth, keyStats:"bookValuePerShare"|"currentRatio"|"debtEquityRatio"): number[] {
+        if(response?.dataList.length > 0){
+            return response.dataList.map((d) => d[keyStats]).filter(v => typeof v === "number").map(v => +v.toFixed(1)) as number[]
+        }
+        return []
+    }
+
+    getHistoryStatsCashFlowResponse(response: ResponseCashFlow, keyStats:"freeCashFlowPerShare"|"freeCashFlowPerNetIncome"|"freeCFPerSales"): number[] {
+        if(response?.dataList.length > 0){
+            return response.dataList.map((d) => d[keyStats])
+            .filter(v => typeof v === "number")
+            // @ts-ignore
+            .map(v => +v.toFixed(1)) as number[]
+        }
+        return []
+    }
+
     async getHistoryStatsGrowth(page: Page, section: string, rowHeader: string) {
         
         const elements = await page
@@ -519,6 +593,17 @@ export class Morningstar {
         // remove last column as it is the "5yr average"
         allValues.pop();
         return allValues.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v))
+    }
+
+    //IncomeStatementDataList | BalanceSheetListDataList | CashFlowListDataList
+    getHistoryStatsGrowthResponse(resp: ResponseKeyMetricsSummary, dataListKey: keyof ResponseKeyMetricsSummary, keyString: keyof IncomeStatementDataList | keyof BalanceSheetListDataList | keyof CashFlowListDataList) {
+        const listData = resp[dataListKey] as IncomeStatementList | BalanceSheetList | CashFlowList;
+        if (listData.dataList.length > 0) {
+            // @ts-ignore
+            return listData.dataList.map((d) => (d[keyString])).filter(v => v !== null && v !== undefined).map(v => +v.toFixed(1))
+        }
+        return []
+
     }
 
     async getDpValue(page: Page, textLabel: string) {
